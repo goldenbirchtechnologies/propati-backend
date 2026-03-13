@@ -1,10 +1,20 @@
-// src/routes/users.js — User profiles, notifications, admin user management
+'use strict';
+// src/routes/users.js — PostgreSQL version
 const router = require('express').Router();
 const { body, validationResult } = require('express-validator');
-const { getDb } = require('../db');
+const { query } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
-const { sanitizeUser, paginate, ok, fail } = require('../utils');
-const { uploadImages } = require('../middleware/upload');
+const { uploadImages, uploadToCloudinary } = require('../middleware/upload');
+const logger = require('../services/logger');
+
+const ok   = (res, data, status = 200) => res.status(status).json({ success: true, ...data });
+const fail = (res, msg, status = 400) => res.status(status).json({ success: false, error: msg });
+
+function sanitizeUser(u) {
+  if (!u) return null;
+  const { password, nin_encrypted, id_number_enc, ...safe } = u;
+  return safe;
+}
 
 // ── GET /api/users/profile ─────────────────────────────────
 router.get('/profile', authenticate, (req, res) => {
@@ -17,169 +27,234 @@ router.patch('/profile', authenticate, uploadImages.single('avatar'), [
   body('phone').optional().isMobilePhone('any'),
   body('agent_bio').optional().isString(),
   body('agent_areas').optional().isArray(),
-], (req, res) => {
+], async (req, res) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return fail(res, 'Validation failed', 422, errors.array());
+  if (!errors.isEmpty()) return fail(res, 'Validation failed', 422);
 
-  const db = getDb();
-  const allowed = ['full_name','phone','agent_bio'];
-  const updates = [];
-  const vals = [];
+  try {
+    const updates = [];
+    const vals = [];
+    let i = 1;
 
-  for (const key of allowed) {
-    if (req.body[key] !== undefined) { updates.push(`${key} = ?`); vals.push(req.body[key]); }
+    for (const key of ['full_name','phone','agent_bio']) {
+      if (req.body[key] !== undefined) { updates.push(`${key} = $${i++}`); vals.push(req.body[key]); }
+    }
+    if (req.body.agent_areas) { updates.push(`agent_areas = $${i++}`); vals.push(JSON.stringify(req.body.agent_areas)); }
+
+    // Avatar upload to Cloudinary
+    if (req.file) {
+      const result = await uploadToCloudinary(req.file.buffer, { subfolder: 'avatars', resource_type: 'image' });
+      updates.push(`avatar_url = $${i++}`);
+      vals.push(result.secure_url);
+    }
+
+    if (!updates.length) return fail(res, 'Nothing to update');
+    updates.push(`updated_at = NOW()`);
+    vals.push(req.user.id);
+
+    const { rows } = await query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${i} RETURNING *`,
+      vals
+    );
+    return ok(res, { user: sanitizeUser(rows[0]) });
+  } catch (e) {
+    logger.error('PATCH /profile error', { error: e.message });
+    return fail(res, 'Failed to update profile', 500);
   }
-  if (req.body.agent_areas) { updates.push('agent_areas = ?'); vals.push(JSON.stringify(req.body.agent_areas)); }
-  if (req.file) { updates.push('avatar_url = ?'); vals.push(`/uploads/images/${req.file.filename}`); }
-
-  if (!updates.length) return fail(res, 'Nothing to update', 400);
-  updates.push("updated_at = datetime('now')");
-  db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.user.id);
-
-  return ok(res, { user: sanitizeUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
 });
 
 // ── GET /api/users/notifications ──────────────────────────
-router.get('/notifications', authenticate, (req, res) => {
-  const db = getDb();
-  const notifs = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id);
-  const unread = db.prepare('SELECT COUNT(*) as n FROM notifications WHERE user_id = ? AND read = 0').get(req.user.id).n;
-  return ok(res, { notifications: notifs, unread });
+router.get('/notifications', authenticate, async (req, res) => {
+  try {
+    const [notifs, unread] = await Promise.all([
+      query('SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50', [req.user.id]),
+      query('SELECT COUNT(*) AS n FROM notifications WHERE user_id = $1 AND read = FALSE', [req.user.id]),
+    ]);
+    return ok(res, { notifications: notifs.rows, unread: parseInt(unread.rows[0].n) });
+  } catch (e) {
+    return fail(res, 'Failed to load notifications', 500);
+  }
 });
 
 // ── POST /api/users/notifications/read-all ────────────────
-router.post('/notifications/read-all', authenticate, (req, res) => {
-  const db = getDb();
-  db.prepare('UPDATE notifications SET read = 1 WHERE user_id = ?').run(req.user.id);
-  return ok(res, { message: 'All notifications marked as read' });
+router.post('/notifications/read-all', authenticate, async (req, res) => {
+  try {
+    await query('UPDATE notifications SET read = TRUE WHERE user_id = $1', [req.user.id]);
+    return ok(res, { message: 'All notifications marked as read' });
+  } catch (e) {
+    return fail(res, 'Failed to mark notifications', 500);
+  }
 });
 
 // ── GET /api/users/saved-listings ─────────────────────────
-router.get('/saved-listings', authenticate, (req, res) => {
-  const db = getDb();
-  const listings = db.prepare(`
-    SELECT l.*, sl.created_at as saved_at,
-      (SELECT url FROM listing_images WHERE listing_id = l.id AND is_cover = 1 LIMIT 1) as cover_image
-    FROM saved_listings sl
-    JOIN listings l ON sl.listing_id = l.id
-    WHERE sl.user_id = ? AND l.status = 'active'
-    ORDER BY sl.created_at DESC
-  `).all(req.user.id);
-  return ok(res, { listings });
+router.get('/saved-listings', authenticate, async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT l.*, sl.created_at AS saved_at,
+        (SELECT url FROM listing_images WHERE listing_id = l.id AND is_cover = TRUE LIMIT 1) AS cover_image
+      FROM saved_listings sl
+      JOIN listings l ON sl.listing_id = l.id
+      WHERE sl.user_id = $1 AND l.status = 'active'
+      ORDER BY sl.created_at DESC
+    `, [req.user.id]);
+    return ok(res, { listings: rows });
+  } catch (e) {
+    return fail(res, 'Failed to load saved listings', 500);
+  }
 });
 
 // ── GET /api/users/agents ──────────────────────────────────
-// Public: browse approved agents
-router.get('/agents', (req, res) => {
-  const db = getDb();
-  const { area, page = 1, limit = 20 } = req.query;
-  const where = ["role = 'agent'", "agent_approved = 1", "is_active = 1"];
-  const params = [];
+router.get('/agents', async (req, res) => {
+  try {
+    const { area, page = 1, limit = 20 } = req.query;
+    const conditions = ["role = 'agent'", "agent_approved = TRUE", "is_active = TRUE"];
+    const params = [];
+    let i = 1;
 
-  if (area) { where.push('agent_areas LIKE ?'); params.push(`%${area}%`); }
+    if (area) { conditions.push(`agent_areas ILIKE $${i++}`); params.push(`%${area}%`); }
 
-  const total = db.prepare(`SELECT COUNT(*) as n FROM users WHERE ${where.join(' AND ')}`).get(...params).n;
-  const offset = (Number(page) - 1) * Number(limit);
-  const agents = db.prepare(`
-    SELECT id, full_name, agent_tier, agent_bio, agent_areas, avatar_url, created_at
-    FROM users WHERE ${where.join(' AND ')}
-    ORDER BY CASE agent_tier WHEN 'senior' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END
-    LIMIT ? OFFSET ?
-  `).all(...params, Number(limit), offset);
+    const whereSQL = 'WHERE ' + conditions.join(' AND ');
+    const offset = (Number(page) - 1) * Number(limit);
 
-  return ok(res, { agents, pagination: paginate(total, Number(page), Number(limit)) });
+    const [countRes, agentsRes] = await Promise.all([
+      query(`SELECT COUNT(*) AS n FROM users ${whereSQL}`, params),
+      query(`
+        SELECT id, full_name, agent_tier, agent_bio, agent_areas, avatar_url, created_at
+        FROM users ${whereSQL}
+        ORDER BY CASE agent_tier WHEN 'senior' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END
+        LIMIT $${i} OFFSET $${i+1}
+      `, [...params, Number(limit), offset]),
+    ]);
+
+    const total = parseInt(countRes.rows[0].n);
+    return ok(res, {
+      agents: agentsRes.rows,
+      pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) },
+    });
+  } catch (e) {
+    return fail(res, 'Failed to load agents', 500);
+  }
 });
 
 // ── ADMIN: Get all users ───────────────────────────────────
-router.get('/admin/all', authenticate, requireRole('admin'), (req, res) => {
-  const db = getDb();
-  const { role, page = 1, limit = 50, q } = req.query;
-  const where = [];
-  const params = [];
+router.get('/admin/all', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    const { role, page = 1, limit = 50, q } = req.query;
+    const conditions = [];
+    const params = [];
+    let i = 1;
 
-  if (role) { where.push('role = ?'); params.push(role); }
-  if (q) {
-    where.push('(full_name LIKE ? OR email LIKE ? OR phone LIKE ?)');
-    const like = `%${q}%`;
-    params.push(like, like, like);
+    if (role) { conditions.push(`role = $${i++}`); params.push(role); }
+    if (q) {
+      conditions.push(`(full_name ILIKE $${i} OR email ILIKE $${i} OR phone ILIKE $${i})`);
+      params.push(`%${q}%`); i++;
+    }
+
+    const whereSQL = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const offset = (Number(page) - 1) * Number(limit);
+
+    const [countRes, usersRes] = await Promise.all([
+      query(`SELECT COUNT(*) AS n FROM users ${whereSQL}`, params),
+      query(`
+        SELECT id,email,phone,role,full_name,nin_verified,id_verified,is_active,is_banned,
+               agent_tier,agent_approved,created_at,last_login
+        FROM users ${whereSQL}
+        ORDER BY created_at DESC
+        LIMIT $${i} OFFSET $${i+1}
+      `, [...params, Number(limit), offset]),
+    ]);
+
+    const total = parseInt(countRes.rows[0].n);
+    return ok(res, {
+      users: usersRes.rows,
+      pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) },
+    });
+  } catch (e) {
+    return fail(res, 'Failed to load users', 500);
   }
-
-  const whereSQL = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = db.prepare(`SELECT COUNT(*) as n FROM users ${whereSQL}`).get(...params).n;
-  const offset = (Number(page) - 1) * Number(limit);
-  const users = db.prepare(`SELECT id,email,phone,role,full_name,nin_verified,id_verified,is_active,is_banned,agent_tier,agent_approved,created_at,last_login FROM users ${whereSQL} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
-    .all(...params, Number(limit), offset);
-
-  return ok(res, { users, pagination: paginate(total, Number(page), Number(limit)) });
 });
 
-// ── ADMIN: Suspend/unsuspend user ─────────────────────────
+// ── ADMIN: Suspend/unsuspend ───────────────────────────────
 router.post('/admin/:userId/suspend', authenticate, requireRole('admin'), [
   body('reason').trim().isLength({ min: 5 }),
-], (req, res) => {
+], async (req, res) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return fail(res, 'Validation failed', 422, errors.array());
+  if (!errors.isEmpty()) return fail(res, 'Reason required', 422);
 
-  const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.userId);
-  if (!user) return fail(res, 'User not found', 404);
-  if (user.role === 'admin') return fail(res, 'Cannot suspend another admin', 403);
+  try {
+    const { rows } = await query('SELECT * FROM users WHERE id = $1', [req.params.userId]);
+    if (!rows.length) return fail(res, 'User not found', 404);
+    if (rows[0].role === 'admin') return fail(res, 'Cannot suspend another admin', 403);
 
-  const suspend = !user.is_banned;
-  db.prepare('UPDATE users SET is_banned = ?, ban_reason = ?, updated_at = datetime("now") WHERE id = ?')
-    .run(suspend ? 1 : 0, suspend ? req.body.reason : null, user.id);
-
-  return ok(res, { message: `User ${suspend ? 'suspended' : 'reinstated'}`, user_id: user.id });
+    const suspend = !rows[0].is_banned;
+    await query(
+      'UPDATE users SET is_banned = $1, ban_reason = $2, updated_at = NOW() WHERE id = $3',
+      [suspend, suspend ? req.body.reason : null, rows[0].id]
+    );
+    return ok(res, { message: `User ${suspend ? 'suspended' : 'reinstated'}` });
+  } catch (e) {
+    return fail(res, 'Failed to update user', 500);
+  }
 });
 
-// ── ADMIN: Approve/reject agent application ───────────────
+// ── ADMIN: Approve/reject agent ────────────────────────────
 router.post('/admin/:userId/approve-agent', authenticate, requireRole('admin'), [
   body('approved').isBoolean(),
-], (req, res) => {
+], async (req, res) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return fail(res, 'Validation failed', 422, errors.array());
+  if (!errors.isEmpty()) return fail(res, 'Validation failed', 422);
 
-  const db = getDb();
-  const user = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'agent'").get(req.params.userId);
-  if (!user) return fail(res, 'Agent not found', 404);
+  try {
+    const { rows } = await query("SELECT id FROM users WHERE id = $1 AND role = 'agent'", [req.params.userId]);
+    if (!rows.length) return fail(res, 'Agent not found', 404);
 
-  db.prepare('UPDATE users SET agent_approved = ?, updated_at = datetime("now") WHERE id = ?')
-    .run(req.body.approved ? 1 : 0, user.id);
-
-  return ok(res, { message: `Agent ${req.body.approved ? 'approved' : 'rejected'}` });
+    await query('UPDATE users SET agent_approved = $1, updated_at = NOW() WHERE id = $2', [req.body.approved, rows[0].id]);
+    return ok(res, { message: `Agent ${req.body.approved ? 'approved' : 'rejected'}` });
+  } catch (e) {
+    return fail(res, 'Failed to update agent', 500);
+  }
 });
 
 // ── ADMIN: Platform stats ──────────────────────────────────
-router.get('/admin/stats', authenticate, requireRole('admin'), (req, res) => {
-  const db = getDb();
-  const stats = {
-    users: {
-      total: db.prepare('SELECT COUNT(*) as n FROM users').get().n,
-      landlords: db.prepare("SELECT COUNT(*) as n FROM users WHERE role = 'landlord'").get().n,
-      tenants: db.prepare("SELECT COUNT(*) as n FROM users WHERE role = 'tenant'").get().n,
-      agents: db.prepare("SELECT COUNT(*) as n FROM users WHERE role = 'agent'").get().n,
-    },
-    listings: {
-      total: db.prepare("SELECT COUNT(*) as n FROM listings WHERE status != 'deleted'").get().n,
-      active: db.prepare("SELECT COUNT(*) as n FROM listings WHERE status = 'active'").get().n,
-      certified: db.prepare("SELECT COUNT(*) as n FROM listings WHERE verification_tier = 'certified'").get().n,
-      pending_verification: db.prepare("SELECT COUNT(*) as n FROM verifications WHERE overall_status = 'in_progress'").get().n,
-    },
-    transactions: {
-      total: db.prepare('SELECT COUNT(*) as n FROM transactions').get().n,
-      in_escrow: db.prepare("SELECT COUNT(*) as n FROM transactions WHERE status = 'in_escrow'").get().n,
-      total_volume: db.prepare("SELECT COALESCE(SUM(amount),0) as n FROM transactions WHERE status IN ('in_escrow','released')").get().n,
-      platform_revenue: db.prepare("SELECT COALESCE(SUM(platform_fee),0) as n FROM transactions WHERE status IN ('in_escrow','released')").get().n,
-    },
-    disputes: {
-      open: db.prepare("SELECT COUNT(*) as n FROM disputes WHERE status = 'open'").get().n,
-      total: db.prepare('SELECT COUNT(*) as n FROM disputes').get().n,
-    },
-    flags: {
-      open: db.prepare("SELECT COUNT(*) as n FROM listing_flags WHERE status = 'open'").get().n,
-    }
-  };
-  return ok(res, { stats });
+router.get('/admin/stats', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    const [users, listings, transactions, disputes, flags] = await Promise.all([
+      query(`SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE role='landlord') AS landlords,
+        COUNT(*) FILTER (WHERE role='tenant') AS tenants,
+        COUNT(*) FILTER (WHERE role='agent') AS agents,
+        COUNT(*) FILTER (WHERE role='estate_manager') AS estate_managers
+        FROM users`),
+      query(`SELECT
+        COUNT(*) FILTER (WHERE status != 'deleted') AS total,
+        COUNT(*) FILTER (WHERE status = 'active') AS active,
+        COUNT(*) FILTER (WHERE verification_tier = 'certified') AS certified,
+        COUNT(*) FILTER (WHERE status = 'draft') AS draft
+        FROM listings`),
+      query(`SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE status = 'in_escrow') AS in_escrow,
+        COALESCE(SUM(amount) FILTER (WHERE status IN ('in_escrow','released')),0) AS total_volume,
+        COALESCE(SUM(platform_fee) FILTER (WHERE status IN ('in_escrow','released')),0) AS platform_revenue
+        FROM transactions`),
+      query(`SELECT COUNT(*) FILTER (WHERE status='open') AS open, COUNT(*) AS total FROM disputes`),
+      query(`SELECT COUNT(*) FILTER (WHERE status='open') AS open FROM listing_flags`),
+    ]);
+
+    return ok(res, {
+      stats: {
+        users:        users.rows[0],
+        listings:     listings.rows[0],
+        transactions: transactions.rows[0],
+        disputes:     disputes.rows[0],
+        flags:        flags.rows[0],
+      }
+    });
+  } catch (e) {
+    logger.error('Admin stats error', { error: e.message });
+    return fail(res, 'Failed to load stats', 500);
+  }
 });
 
 module.exports = router;

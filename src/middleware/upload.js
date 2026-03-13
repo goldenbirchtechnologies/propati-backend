@@ -1,17 +1,19 @@
-// src/middleware/upload.js — Cloudinary cloud storage (replaces local disk)
-const multer = require('multer');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+'use strict';
+// src/middleware/upload.js — Multer memory storage + Cloudinary v2 stream upload
+// No multer-storage-cloudinary dependency needed
+const multer     = require('multer');
 const cloudinary = require('cloudinary').v2;
-const logger = require('../services/logger');
+const logger     = require('../services/logger');
 
-// Configure Cloudinary
 cloudinary.config({
-  cloud_name:  process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:     process.env.CLOUDINARY_API_KEY,
-  api_secret:  process.env.CLOUDINARY_API_SECRET,
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const FOLDER = process.env.CLOUDINARY_FOLDER || 'propati';
+const FOLDER     = process.env.CLOUDINARY_FOLDER || 'propati';
+const maxFileMB  = parseInt(process.env.MAX_FILE_SIZE_MB  || '10');
+const maxVideoMB = parseInt(process.env.MAX_VIDEO_SIZE_MB || '100');
 
 // ── Check if Cloudinary is configured ─────────────────────
 function isCloudinaryConfigured() {
@@ -23,87 +25,61 @@ function isCloudinaryConfigured() {
   );
 }
 
-// ── Cloudinary storage factories ──────────────────────────
-function makeCloudinaryStorage(subfolder, allowedFormats, resourceType = 'image') {
-  return new CloudinaryStorage({
-    cloudinary,
-    params: async (req, file) => ({
-      folder:       `${FOLDER}/${subfolder}`,
-      allowed_formats: allowedFormats,
-      resource_type: resourceType,
-      // Generate a clean filename
-      public_id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      // Auto quality and format optimization
-      transformation: resourceType === 'image'
-        ? [{ quality: 'auto:good', fetch_format: 'auto' }]
-        : undefined,
-    }),
-  });
-}
-
-// ── Fallback: memory storage for dev without Cloudinary ───
-const memoryStorage = multer.memoryStorage();
-
-// ── File filter factories ─────────────────────────────────
+// ── File filters ───────────────────────────────────────────
 const imageFilter = (req, file, cb) => {
-  const allowed = ['image/jpeg', 'image/png', 'image/webp'];
-  if (allowed.includes(file.mimetype)) cb(null, true);
+  if (['image/jpeg','image/png','image/webp'].includes(file.mimetype)) cb(null, true);
   else cb(new Error('Only JPEG, PNG, WebP images allowed'));
 };
-
 const docFilter = (req, file, cb) => {
-  const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
-  if (allowed.includes(file.mimetype)) cb(null, true);
+  if (['application/pdf','image/jpeg','image/png'].includes(file.mimetype)) cb(null, true);
   else cb(new Error('Only PDF, JPEG, PNG documents allowed'));
 };
-
 const videoFilter = (req, file, cb) => {
-  const allowed = ['video/mp4', 'video/quicktime', 'video/webm'];
-  if (allowed.includes(file.mimetype)) cb(null, true);
+  if (['video/mp4','video/quicktime','video/webm'].includes(file.mimetype)) cb(null, true);
   else cb(new Error('Only MP4, MOV, WebM videos allowed'));
 };
 
-const maxFileMB = parseInt(process.env.MAX_FILE_SIZE_MB || '10');
-const maxVideoMB = parseInt(process.env.MAX_VIDEO_SIZE_MB || '100');
+// ── All uploads use memory storage ────────────────────────
+// We stream the buffer to Cloudinary manually after multer parses the form
+const uploadImages   = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxFileMB  * 1024 * 1024 }, fileFilter: imageFilter });
+const uploadDocument = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxFileMB  * 1024 * 1024 }, fileFilter: docFilter  });
+const uploadVideo    = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxVideoMB * 1024 * 1024 }, fileFilter: videoFilter });
+const uploadAny      = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxFileMB  * 1024 * 1024 } });
 
-// ── Export multer instances ────────────────────────────────
-let uploadImages, uploadDocument, uploadVideo;
+// ── Upload a buffer to Cloudinary ─────────────────────────
+// Returns { secure_url, public_id } or throws
+function uploadToCloudinary(buffer, options = {}) {
+  return new Promise((resolve, reject) => {
+    if (!isCloudinaryConfigured()) {
+      // Dev fallback — return a placeholder URL
+      logger.warn('Cloudinary not configured — returning placeholder URL');
+      return resolve({
+        secure_url: `https://via.placeholder.com/800x600?text=propati-dev`,
+        public_id:  `dev-${Date.now()}`,
+      });
+    }
 
-if (isCloudinaryConfigured()) {
-  logger.info('☁️  Cloudinary storage configured');
+    const defaults = {
+      folder:        `${FOLDER}/${options.subfolder || 'misc'}`,
+      resource_type: options.resource_type || 'image',
+      public_id:     `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    };
+    if (options.resource_type === 'image') {
+      defaults.transformation = [{ quality: 'auto:good', fetch_format: 'auto' }];
+    }
 
-  uploadImages = multer({
-    storage: makeCloudinaryStorage('images', ['jpg', 'png', 'webp'], 'image'),
-    limits: { fileSize: maxFileMB * 1024 * 1024 },
-    fileFilter: imageFilter,
+    const uploadOptions = { ...defaults, ...options };
+    delete uploadOptions.subfolder; // not a cloudinary param
+
+    const stream = cloudinary.uploader.upload_stream(uploadOptions, (err, result) => {
+      if (err) { logger.error('Cloudinary upload error', { error: err.message }); return reject(err); }
+      resolve(result);
+    });
+    stream.end(buffer);
   });
-
-  uploadDocument = multer({
-    storage: makeCloudinaryStorage('documents', ['pdf', 'jpg', 'png'], 'raw'),
-    limits: { fileSize: maxFileMB * 1024 * 1024 },
-    fileFilter: docFilter,
-  });
-
-  uploadVideo = multer({
-    storage: makeCloudinaryStorage('videos', ['mp4', 'mov', 'webm'], 'video'),
-    limits: { fileSize: maxVideoMB * 1024 * 1024 },
-    fileFilter: videoFilter,
-  });
-} else {
-  logger.warn('⚠️  Cloudinary not configured — using memory storage (dev mode). Files will NOT persist across restarts.');
-
-  const fallback = (filter, sizeMB) => multer({
-    storage: memoryStorage,
-    limits: { fileSize: sizeMB * 1024 * 1024 },
-    fileFilter: filter,
-  });
-
-  uploadImages   = fallback(imageFilter, maxFileMB);
-  uploadDocument = fallback(docFilter, maxFileMB);
-  uploadVideo    = fallback(videoFilter, maxVideoMB);
 }
 
-// ── Helper: delete a file from Cloudinary ─────────────────
+// ── Delete a file from Cloudinary ─────────────────────────
 async function deleteFile(publicId, resourceType = 'image') {
   if (!isCloudinaryConfigured() || !publicId) return;
   try {
@@ -114,27 +90,21 @@ async function deleteFile(publicId, resourceType = 'image') {
   }
 }
 
-// ── Helper: get URL from uploaded file (works for both modes) ──
+// ── Get URL from uploaded file ─────────────────────────────
 function getFileUrl(file) {
   if (!file) return null;
-  // Cloudinary upload — path contains the secure URL
   if (file.path && file.path.startsWith('http')) return file.path;
-  // Multer local/memory — construct URL
   if (file.filename) return `/uploads/${file.filename}`;
   return null;
-}
-
-function getPublicId(file) {
-  if (!file) return null;
-  return file.filename || null; // Cloudinary sets this as the public_id
 }
 
 module.exports = {
   uploadImages,
   uploadDocument,
   uploadVideo,
+  uploadAny,
+  uploadToCloudinary,
   deleteFile,
   getFileUrl,
-  getPublicId,
   isCloudinaryConfigured,
 };
