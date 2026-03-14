@@ -35,9 +35,24 @@ app.use(helmet({
   hsts: process.env.NODE_ENV==='production' ? { maxAge:31536000, includeSubDomains:true, preload:true } : false,
 }));
 
-const allowedOrigins = [process.env.FRONTEND_URL,'http://localhost:5500','http://localhost:3000','http://127.0.0.1:5500','http://127.0.0.1:3000'].filter(Boolean);
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.FRONTEND_URL_2,
+  'https://propati-frontend.vercel.app',
+  'http://localhost:5500',
+  'http://localhost:3000',
+  'http://127.0.0.1:5500',
+  'http://127.0.0.1:3000',
+].filter(Boolean);
+
 app.use(cors({
-  origin: (origin, cb) => { if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV!=='production') return cb(null,true); logger.security('CORS blocked',origin); cb(new Error('Not allowed by CORS')); },
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (process.env.NODE_ENV !== 'production') return cb(null, true);
+    logger.warn('CORS blocked: ' + origin + ' | allowed: ' + allowedOrigins.join(', '));
+    cb(new Error('Not allowed by CORS'));
+  },
   credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','X-Request-ID'],
 }));
