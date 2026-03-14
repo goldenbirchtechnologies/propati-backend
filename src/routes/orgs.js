@@ -489,7 +489,7 @@ router.post('/:id/subscribe', authenticate, requireOrgAccess(['manager']), [
       callback_url: `${process.env.FRONTEND_URL || 'https://propati.ng'}/billing-callback`,
     });
 
-    if (!paystackRes.status) throw new Error(paystackRes.message || 'Paystack error');
+    if (!paystackRes.success) throw new Error(paystackRes.error || 'Paystack error');
 
     // Store pending subscription
     await query(`

@@ -128,7 +128,7 @@ async function runRentReminders() {
       JOIN agreements a ON rs.agreement_id=a.id
       JOIN listings l ON a.listing_id=l.id
       JOIN users u ON a.tenant_id=u.id
-      WHERE rs.status='upcoming' AND rs.reminder_sent=0
+      WHERE rs.status='upcoming' AND rs.reminder_sent=false
         AND rs.due_date IN (
           (NOW()+INTERVAL '7 days')::date::text,
           (NOW()+INTERVAL '3 days')::date::text,
@@ -138,7 +138,7 @@ async function runRentReminders() {
     for (const r of rows) {
       const daysLeft = Math.round((new Date(r.due_date)-new Date())/(1000*60*60*24));
       await notifyRentDue({id:r.tenant_id,full_name:r.full_name,email:r.email,phone:r.phone},{id:r.agreement_id,rent_amount:r.amount,listing_title:r.listing_title},daysLeft);
-      await query('UPDATE rent_schedule SET reminder_sent=1 WHERE id=$1',[r.schedule_id]);
+      await query('UPDATE rent_schedule SET reminder_sent=true WHERE id=$1',[r.schedule_id]);
     }
     await query("UPDATE rent_schedule SET status='overdue' WHERE status='upcoming' AND due_date<NOW()::date::text");
     logger.info(`Rent reminders done. ${rows.length} sent.`);
@@ -164,8 +164,7 @@ async function notifyTeamInvite(email, orgName, role, inviteToken) {
 async function notifyNewTicket(orgId, ticket, propertyTitle) {
   try {
     // Notify all managers in the org
-    const { query: db } = require('../db');
-    const managers = await db(
+    const managers = await query(
       `SELECT u.id, u.email, u.phone, u.full_name FROM org_members om JOIN users u ON om.user_id = u.id WHERE om.org_id = $1 AND om.role IN ('manager','maintenance') AND om.status = 'active'`,
       [orgId]
     );
@@ -189,8 +188,7 @@ async function notifyTicketResolved(tenantId, ticketTitle, tenantPhone) {
     sendSMS(tenantPhone, `PROPATI: Your maintenance request "${ticketTitle.slice(0, 60)}" has been resolved. Login to confirm.`).catch(() => {});
   }
   try {
-    const { query: db } = require('../db');
-    const tenant = await db('SELECT email, full_name FROM users WHERE id = $1', [tenantId]);
+    const tenant = await query('SELECT email, full_name FROM users WHERE id = $1', [tenantId]);
     if (tenant.rows[0]?.email) {
       sendEmail(tenant.rows[0].email, `Issue Resolved: ${ticketTitle}`,
         wrap(`<h2 style="color:#0B1220">✅ Issue Resolved</h2>
@@ -212,9 +210,8 @@ async function notifyAgreementReady(tenantId, landlordId, propertyTitle, agreeme
     `Agreement for ${propertyTitle} sent to tenant for signature.`, { agreement_id: agreementId }
   );
   try {
-    const { query: db } = require('../db');
-    const tenant   = await db('SELECT email, full_name, phone FROM users WHERE id = $1', [tenantId]);
-    const landlord = await db('SELECT email, full_name FROM users WHERE id = $1', [landlordId]);
+    const tenant   = await query('SELECT email, full_name, phone FROM users WHERE id = $1', [tenantId]);
+    const landlord = await query('SELECT email, full_name FROM users WHERE id = $1', [landlordId]);
     const t = tenant.rows[0];
     const l = landlord.rows[0];
     if (t?.email) sendTemplateEmail(t.email, 'agreement_ready', { name: t.full_name, propertyTitle, agreementId, role: 'tenant' }).catch(() => {});

@@ -97,11 +97,9 @@ router.post('/', authenticate, requireRole('landlord', 'agent', 'admin', 'estate
       }
     }
 
-    // Notify tenant
-    const tenantUser = tenant.rows[0];
+    // Notify tenant and landlord
     await notifyAgreementReady(
-      tenant_id, 'tenant', listing.rows[0].title, id,
-      tenantUser.email, tenantUser.phone
+      tenant_id, landlordId, listing.rows[0].title, id
     );
 
     // Update agreement status to 'sent'

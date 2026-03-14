@@ -111,4 +111,9 @@ function verifyWebhook(body, signature) {
   return hash === signature;
 }
 
-module.exports = { initializePayment, verifyPayment, createRecipient, initiateTransfer, verifyWebhook };
+module.exports = {
+  initializePayment, verifyPayment, createRecipient, initiateTransfer, verifyWebhook,
+  // Aliases used by payments.js and orgs.js
+  initializeTransaction: initializePayment,
+  verifyTransaction: verifyPayment,
+};

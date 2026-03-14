@@ -86,7 +86,7 @@ router.post('/initiate', authenticate, [
       callback_url: `${process.env.FRONTEND_URL || 'https://propati.ng'}/payment-callback`,
     });
 
-    if (!paystackRes.status) throw new Error(paystackRes.message || 'Paystack init failed');
+    if (!paystackRes.success) throw new Error(paystackRes.error || 'Paystack init failed');
 
     ok(res, {
       transaction_id: txnId,
@@ -120,7 +120,7 @@ router.get('/verify/:reference', authenticate, async (req, res) => {
 
     // Verify with Paystack
     const paystackRes = await paystack.verifyTransaction(reference);
-    if (!paystackRes.status) return fail(res, 'Paystack verification failed');
+    if (!paystackRes.success) return fail(res, 'Paystack verification failed');
 
     const pData = paystackRes.data;
     if (pData.status !== 'success') {
@@ -148,16 +148,15 @@ router.get('/verify/:reference', authenticate, async (req, res) => {
     const listingResult = await query(
       'SELECT title FROM listings WHERE id = $1', [txn.listing_id]
     );
-    const payerResult = await query('SELECT full_name FROM users WHERE id = $1', [txn.payer_id]);
-    const landlordResult = await query('SELECT phone, email FROM users WHERE id = $1', [txn.payee_id]);
+    const landlordResult = await query('SELECT id, full_name, phone, email FROM users WHERE id = $1', [txn.payee_id]);
 
-    await notifyPaymentReceived(
-      txn.payee_id,
-      payerResult.rows[0]?.full_name || 'Tenant',
-      txn.amount,
-      listingResult.rows[0]?.title || 'your property',
-      landlordResult.rows[0]?.phone
-    );
+    if (landlordResult.rows[0]) {
+      await notifyPaymentReceived(
+        landlordResult.rows[0],
+        txn.amount,
+        listingResult.rows[0]?.title || 'your property'
+      );
+    }
 
     const updatedTxn = await query('SELECT * FROM transactions WHERE reference = $1', [reference]);
     ok(res, { transaction: updatedTxn.rows[0], verified: true });
@@ -281,13 +280,13 @@ router.post('/release-escrow/:txn_id', authenticate, requireRole('admin'), async
     `, [req.user.id, txn_id]);
 
     // Notify landlord
-    const listingResult = await query('SELECT title FROM listings WHERE id = $1', [txn.listing_id]);
     const landlord = landlordResult.rows[0];
-    await notifyEscrowReleased(
-      txn.payee_id, txn.payee_amount,
-      listingResult.rows[0]?.title || 'your property',
-      null, landlord?.email
-    );
+    if (landlord) {
+      await notifyEscrowReleased(
+        { id: txn.payee_id, full_name: landlord.full_name, email: landlord.email },
+        txn.payee_amount
+      );
+    }
 
     ok(res, { released: true, amount: txn.payee_amount, payee: landlord?.full_name });
   } catch (e) {
@@ -361,8 +360,8 @@ router.post('/cron/release-due', async (req, res) => {
       `, [txn.id]);
 
       await notifyEscrowReleased(
-        txn.payee_id, txn.payee_amount, txn.listing_title,
-        txn.landlord_phone, txn.landlord_email
+        { id: txn.payee_id, full_name: txn.landlord_name, phone: txn.landlord_phone, email: txn.landlord_email },
+        txn.payee_amount
       );
       released++;
     }
