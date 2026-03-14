@@ -13,3 +13,32 @@
 {"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS guarantor_relationship TEXT","timestamp":"2026-03-14 15:43:52"}
 {"level":"info","message":"  ✓ ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check","timestamp":"2026-03-14 15:43:52"}
 {"level":"info","message":"  ✓ ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('lan","timestamp":"2026-03-14 15:43:52"}
+{"error":"getaddrinfo EAI_AGAIN aws-1-eu-west-2.pooler.supabase.com","level":"error","message":"Database query error","sql":"SELECT NOW() as time","timestamp":"2026-03-14 15:49:40"}
+{"error":"getaddrinfo EAI_AGAIN aws-1-eu-west-2.pooler.supabase.com","level":"error","message":"Database query error","sql":"SELECT NOW() as time","timestamp":"2026-03-14 15:49:51"}
+{"duration":915,"level":"warn","message":"Slow query detected","sql":"SELECT NOW() as time","timestamp":"2026-03-14 15:50:04"}
+{"level":"info","message":"✅ PostgreSQL connected","time":"2026-03-14T14:50:04.790Z","timestamp":"2026-03-14 15:50:04"}
+{"level":"info","message":"✅ All migrations complete","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"Running migration v3 — tenant profile fields...","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"Running migration v3 — tenant profile fields...","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_status TEXT CHEC","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type TEXT CHECK(","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS employer_name TEXT","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS yearly_income BIGINT","timestamp":"2026-03-14 15:50:05"}
+{"duration":678,"level":"warn","message":"Slow query detected","sql":"ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_status TEXT CHECK(employment_status IN ('emplo","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_status TEXT CHEC","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type TEXT CHECK(","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS income_verified BOOLEAN DEF","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS employer_name TEXT","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_bio TEXT","timestamp":"2026-03-14 15:50:05"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN D","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS yearly_income BIGINT","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS guarantor_name TEXT","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS guarantor_phone TEXT","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS income_verified BOOLEAN DEF","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS guarantor_relationship TEXT","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_bio TEXT","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN D","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check","timestamp":"2026-03-14 15:50:06"}
+{"level":"info","message":"  ✓ ALTER TABLE users ADD COLUMN IF NOT EXISTS guarantor_name TEXT","timestamp":"2026-03-14 15:50:07"}

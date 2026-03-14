@@ -226,7 +226,7 @@ async function notifyAgreementReady(tenantId, landlordId, propertyTitle, agreeme
 }
 
 module.exports = {
-  createNotification, sendEmail, sendSMS, sendTemplateEmail,
+  createNotification, sendEmail, sendSMS, sendTemplateEmail, wrap,
   notifyWelcome, notifyRentDue, notifyPaymentReceived, notifyEscrowReleased,
   notifyVerificationUpdate, notifyNewMessage, runRentReminders,
   notifyTeamInvite, notifyNewTicket, notifyTicketResolved, notifyAgreementReady,

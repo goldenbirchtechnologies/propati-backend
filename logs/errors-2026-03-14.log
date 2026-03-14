@@ -1,0 +1,2 @@
+{"error":"getaddrinfo EAI_AGAIN aws-1-eu-west-2.pooler.supabase.com","level":"error","message":"Database query error","sql":"SELECT NOW() as time","timestamp":"2026-03-14 15:49:40"}
+{"error":"getaddrinfo EAI_AGAIN aws-1-eu-west-2.pooler.supabase.com","level":"error","message":"Database query error","sql":"SELECT NOW() as time","timestamp":"2026-03-14 15:49:51"}
