@@ -358,6 +358,9 @@ async function migrate() {
   // Run additive patch migrations (safe to re-run)
   try { const { migrateV3 } = require('./migrate_v3'); await migrateV3(); }
   catch (e) { logger.warn('migrate_v3 skipped', { error: e.message }); }
+
+  try { const { migrateV4 } = require('./migrate_v4'); await migrateV4(); }
+  catch (e) { logger.warn('migrate_v4 skipped', { error: e.message }); }
 }
 
 if (require.main === module) {

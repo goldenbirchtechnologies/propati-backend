@@ -1,5 +1,13 @@
 // src/index.js — PROPATI Backend v2.1 — all routes mounted
 require('dotenv').config();
+const Sentry = require('@sentry/node');
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.2,
+  });
+}
 const express       = require('express');
 const cors          = require('cors');
 const helmet        = require('helmet');
@@ -93,6 +101,7 @@ function scheduleDailyCron(fn, label, hourUTC = 7) {
 if (process.env.NODE_ENV !== 'test') scheduleDailyCron(runRentReminders, 'Rent reminders', 7);
 
 app.use((req,res) => res.status(404).json({ success:false, error:`Route ${req.method} ${req.path} not found` }));
+if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 app.use((err,req,res,next) => {
   logger.error('Unhandled error',{requestId:req.id,method:req.method,path:req.path,error:err.message});
   if (err.message==='Not allowed by CORS') return res.status(403).json({success:false,error:'CORS: Origin not allowed'});

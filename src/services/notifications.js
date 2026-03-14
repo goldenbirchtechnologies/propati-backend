@@ -1,22 +1,18 @@
 // src/services/notifications.js — Full Notification Service
-// Channels: in-app DB + Nodemailer email + Termii SMS (Nigerian gateway)
-// Env vars: SMTP_HOST/SMTP_USER/SMTP_PASS/EMAIL_FROM or GMAIL_USER/GMAIL_APP_PASSWORD
+// Channels: in-app DB + Resend email + Termii SMS (Nigerian gateway)
+// Env vars: RESEND_API_KEY, EMAIL_FROM
 //           TERMII_API_KEY, TERMII_SENDER_ID (request "PROPATI" at termii.com)
 'use strict';
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db');
 const logger = require('./logger');
 const axios = require('axios');
 
-function getTransport() {
-  if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-    return nodemailer.createTransport({ service:'gmail', auth:{ user:process.env.GMAIL_USER, pass:process.env.GMAIL_APP_PASSWORD } });
-  }
-  if (process.env.SMTP_HOST) {
-    return nodemailer.createTransport({ host:process.env.SMTP_HOST, port:parseInt(process.env.SMTP_PORT)||587, secure:parseInt(process.env.SMTP_PORT)===465, auth:{ user:process.env.SMTP_USER, pass:process.env.SMTP_PASS } });
-  }
-  return null;
+let resend = null;
+function getResend() {
+  if (!resend && process.env.RESEND_API_KEY) resend = new Resend(process.env.RESEND_API_KEY);
+  return resend;
 }
 
 function wrap(body) {
@@ -48,12 +44,16 @@ async function createNotification(userId, type, title, body, data=null) {
 
 async function sendEmail(to, subject, html) {
   if (!to) return {success:false,error:'No recipient'};
-  const transport = getTransport();
-  if (!transport) { logger.info(`[EMAIL DEV → ${to}] ${subject}`); return {success:true,mock:true}; }
+  const client = getResend();
+  if (!client) { logger.info(`[EMAIL DEV → ${to}] ${subject}`); return {success:true,mock:true}; }
   try {
-    await transport.sendMail({ from: process.env.EMAIL_FROM||'PROPATI <noreply@propati.ng>', to, subject, html });
+    const { data, error } = await client.emails.send({
+      from: process.env.EMAIL_FROM || 'PROPATI <hello@propati.ng>',
+      to, subject, html
+    });
+    if (error) throw new Error(error.message);
     logger.info(`Email sent: ${to} — ${subject}`);
-    return {success:true};
+    return {success:true, id:data?.id};
   } catch(e) { logger.error('Email error', {error:e.message,to}); return {success:false,error:e.message}; }
 }
 
