@@ -99,17 +99,17 @@ async function seed() {
 
   // ── CONVERSATIONS + MESSAGES ──────────────────────────────
   await query(`
-    INSERT INTO conversations (id,tenant_id,landlord_id,listing_id,subject,last_message,last_message_at,tenant_unread,landlord_unread,status)
+    INSERT INTO conversations (id,tenant_id,landlord_id,listing_id,subject,last_message,last_message_at,unread_tenant,unread_landlord,status)
     VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7,$8,'active')
     ON CONFLICT (id) DO NOTHING
   `, ['cnv_001','usr_tenant_001','usr_ll_001','lst_001','Enquiry about Lekki duplex','Is the property still available?',1,0]);
 
   await query(`
-    INSERT INTO messages (id,conversation_id,sender_id,body,is_read,created_at)
+    INSERT INTO messages (id,conversation_id,sender_id,content,is_read,created_at)
     VALUES
-      ($1,'cnv_001','usr_tenant_001','Hi, I saw the 4-bed duplex listing on PROPATI. Is it still available for viewing?',1,NOW()-INTERVAL '2 hours'),
-      ($2,'cnv_001','usr_ll_001','Yes, it is! When would you like to come for a viewing? I am available weekday afternoons.',1,NOW()-INTERVAL '1 hour'),
-      ($3,'cnv_001','usr_tenant_001','Is the property still available?',0,NOW())
+      ($1,'cnv_001','usr_tenant_001','Hi, I saw the 4-bed duplex listing on PROPATI. Is it still available for viewing?',TRUE,NOW()-INTERVAL '2 hours'),
+      ($2,'cnv_001','usr_ll_001','Yes, it is! When would you like to come for a viewing? I am available weekday afternoons.',TRUE,NOW()-INTERVAL '1 hour'),
+      ($3,'cnv_001','usr_tenant_001','Is the property still available?',FALSE,NOW())
     ON CONFLICT (id) DO NOTHING
   `, [uuidv4(), uuidv4(), uuidv4()]);
   console.log('  ✓ conversations + messages');

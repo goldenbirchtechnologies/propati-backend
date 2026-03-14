@@ -1,5 +1,5 @@
-'use strict';
 // src/routes/users.js — PostgreSQL version
+'use strict';
 const router = require('express').Router();
 const { body, validationResult } = require('express-validator');
 const { query } = require('../db');
@@ -258,3 +258,131 @@ router.get('/admin/stats', authenticate, requireRole('admin'), async (req, res) 
 });
 
 module.exports = router;
+
+// ── PATCH /api/users/tenant-profile ───────────────────────
+// Tenant updates their employment profile
+router.patch('/tenant-profile', authenticate, requireRole('tenant'), [
+  body('employment_status').optional().isIn(['employed','self_employed','business_owner','student','retired','unemployed']),
+  body('employment_type').optional().isIn(['full_time','part_time','contract','freelance','internship']),
+  body('employer_name').optional().trim().isLength({ max: 100 }),
+  body('job_title').optional().trim().isLength({ max: 100 }),
+  body('yearly_income').optional().isInt({ min: 0 }),
+  body('profile_bio').optional().trim().isLength({ max: 500 }),
+  body('guarantor_name').optional().trim().isLength({ max: 100 }),
+  body('guarantor_phone').optional().trim(),
+  body('guarantor_relationship').optional().trim().isLength({ max: 50 }),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return fail(res, errors.array()[0].msg, 422);
+
+  try {
+    const allowed = ['employment_status','employment_type','employer_name','job_title',
+      'yearly_income','profile_bio','guarantor_name','guarantor_phone','guarantor_relationship'];
+    const updates = [];
+    const vals = [];
+    let i = 1;
+
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) {
+        updates.push(`${key} = $${i++}`);
+        vals.push(req.body[key]);
+      }
+    }
+    if (!updates.length) return fail(res, 'Nothing to update');
+
+    // Mark profile as completed if key fields are filled
+    const checkFields = ['employment_status','yearly_income'];
+    const willComplete = checkFields.every(f => req.body[f] || true); // optimistic
+    updates.push(`profile_completed = (employment_status IS NOT NULL AND yearly_income IS NOT NULL)`);
+    updates.push(`updated_at = NOW()`);
+    vals.push(req.user.id);
+
+    const { rows } = await query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${i} RETURNING *`,
+      vals
+    );
+    return ok(res, { user: sanitizeUser(rows[0]) });
+  } catch (e) {
+    logger.error('PATCH /tenant-profile error', { error: e.message });
+    return fail(res, 'Failed to update profile', 500);
+  }
+});
+
+// ── GET /api/users/tenant-profile/:userId ─────────────────
+// Landlord views a tenant's public profile for assessment
+// Only accessible to landlords, agents, and admins
+router.get('/tenant-profile/:userId', authenticate, async (req, res) => {
+  if (!['landlord','agent','admin','estate_manager'].includes(req.user.role)) {
+    return fail(res, 'Only landlords can view tenant profiles', 403);
+  }
+
+  try {
+    const { rows } = await query(`
+      SELECT
+        id, full_name, avatar_url, phone,
+        employment_status, employment_type, employer_name, job_title,
+        yearly_income, income_verified, profile_bio, profile_completed,
+        nin_verified, id_verified,
+        guarantor_name, guarantor_phone, guarantor_relationship,
+        created_at,
+        -- Agreement history count
+        (SELECT COUNT(*) FROM agreements WHERE tenant_id = u.id AND status = 'fully_signed')::int AS completed_tenancies,
+        -- Any active agreement
+        (SELECT l.title FROM agreements a JOIN listings l ON a.listing_id = l.id
+         WHERE a.tenant_id = u.id AND a.status = 'fully_signed'
+         ORDER BY a.created_at DESC LIMIT 1) AS current_property
+      FROM users u
+      WHERE id = $1 AND role = 'tenant'
+    `, [req.params.userId]);
+
+    if (!rows.length) return fail(res, 'Tenant not found', 404);
+
+    const t = rows[0];
+    // Mask sensitive fields — landlord sees income band not exact figure
+    const incomeBand = t.yearly_income
+      ? t.yearly_income < 1000000 ? 'Below ₦1M/yr'
+      : t.yearly_income < 3000000 ? '₦1M–₦3M/yr'
+      : t.yearly_income < 6000000 ? '₦3M–₦6M/yr'
+      : t.yearly_income < 12000000 ? '₦6M–₦12M/yr'
+      : 'Above ₦12M/yr'
+      : null;
+
+    return ok(res, {
+      tenant: {
+        ...t,
+        yearly_income: undefined, // never expose exact figure
+        income_band: incomeBand,
+        verification_score: [t.nin_verified, t.id_verified, t.income_verified, t.profile_completed].filter(Boolean).length,
+      }
+    });
+  } catch (e) {
+    logger.error('GET /tenant-profile error', { error: e.message });
+    return fail(res, 'Failed to load tenant profile', 500);
+  }
+});
+
+// ── GET /api/users/receipts ────────────────────────────────
+// Tenant gets all their payment receipts
+router.get('/receipts', authenticate, requireRole('tenant'), async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT
+        t.id, t.reference, t.amount, t.platform_fee, t.payee_amount,
+        t.type, t.status, t.description, t.created_at,
+        l.title AS property_title, l.area,
+        u.full_name AS landlord_name,
+        rs.due_date
+      FROM transactions t
+      JOIN listings l ON t.listing_id = l.id
+      JOIN users u ON t.payee_id = u.id
+      LEFT JOIN rent_schedule rs ON t.id = rs.transaction_id
+      WHERE t.payer_id = $1
+      ORDER BY t.created_at DESC
+      LIMIT 100
+    `, [req.user.id]);
+
+    return ok(res, { receipts: rows });
+  } catch (e) {
+    return fail(res, 'Failed to load receipts', 500);
+  }
+});

@@ -1,9 +1,9 @@
-'use strict';
 // src/middleware/upload.js — Multer memory storage + Cloudinary v2 stream upload
 // No multer-storage-cloudinary dependency needed
-const multer     = require('multer');
+'use strict';
+const multer    = require('multer');
 const cloudinary = require('cloudinary').v2;
-const logger     = require('../services/logger');
+const logger    = require('../services/logger');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -11,11 +11,10 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const FOLDER     = process.env.CLOUDINARY_FOLDER || 'propati';
+const FOLDER = process.env.CLOUDINARY_FOLDER || 'propati';
 const maxFileMB  = parseInt(process.env.MAX_FILE_SIZE_MB  || '10');
 const maxVideoMB = parseInt(process.env.MAX_VIDEO_SIZE_MB || '100');
 
-// ── Check if Cloudinary is configured ─────────────────────
 function isCloudinaryConfigured() {
   return !!(
     process.env.CLOUDINARY_CLOUD_NAME &&

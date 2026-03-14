@@ -1,5 +1,5 @@
-'use strict';
 // src/routes/listings.js — PostgreSQL version
+'use strict';
 const router = require('express').Router();
 const { v4: uuidv4 } = require('uuid');
 const { body, query: qv, validationResult } = require('express-validator');

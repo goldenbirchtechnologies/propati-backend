@@ -33,7 +33,7 @@ router.get('/conversations', authenticate, async (req, res) => {
         CASE WHEN c.tenant_id = $1 THEN ull.full_name   ELSE utt.full_name   END AS other_name,
         CASE WHEN c.tenant_id = $1 THEN ull.avatar_url  ELSE utt.avatar_url  END AS other_avatar,
         CASE WHEN c.tenant_id = $1 THEN ull.id          ELSE utt.id          END AS other_id,
-        CASE WHEN c.tenant_id = $1 THEN c.tenant_unread ELSE c.landlord_unread END AS unread_count
+        CASE WHEN c.tenant_id = $1 THEN c.unread_tenant ELSE c.unread_landlord END AS unread_count
       FROM conversations c
       JOIN users utt   ON c.tenant_id   = utt.id
       JOIN users ull   ON c.landlord_id = ull.id
@@ -104,7 +104,7 @@ router.post('/conversations', authenticate, [
     if (initial_message && initial_message.trim()) {
       const msgId = 'msg_' + uuidv4().replace(/-/g, '').slice(0, 12);
       await query(`
-        INSERT INTO messages (id, conversation_id, sender_id, body, created_at)
+        INSERT INTO messages (id, conversation_id, sender_id, content, created_at)
         VALUES ($1,$2,$3,$4,NOW())
       `, [msgId, conv.id, uid, initial_message.trim()]);
 
@@ -112,7 +112,7 @@ router.post('/conversations', authenticate, [
       await query(`
         UPDATE conversations
         SET last_message=$1, last_message_at=NOW(),
-            ${uid === tenant_id ? 'landlord_unread = landlord_unread + 1' : 'tenant_unread = tenant_unread + 1'}
+            ${uid === tenant_id ? 'unread_landlord = unread_landlord + 1' : 'unread_tenant = unread_tenant + 1'}
         WHERE id=$2
       `, [initial_message.trim().slice(0, 100), conv.id]);
 
@@ -183,7 +183,7 @@ router.get('/conversations/:id', authenticate, async (req, res) => {
     );
 
     // Mark as read for current user
-    const unreadField = uid === conv.tenant_id ? 'tenant_unread' : 'landlord_unread';
+    const unreadField = uid === conv.tenant_id ? 'unread_tenant' : 'unread_landlord';
     await query(`UPDATE conversations SET ${unreadField}=0 WHERE id=$1`, [conv.id]);
     await query(`UPDATE messages SET is_read=1, read_at=NOW() WHERE conversation_id=$1 AND sender_id!=$2 AND is_read=0`, [conv.id, uid]);
 
@@ -223,7 +223,7 @@ router.get('/conversations/:id/messages', authenticate, [
 
     // Mark incoming messages as read
     if (rows.length > 0) {
-      const unreadField = uid === c.tenant_id ? 'tenant_unread' : 'landlord_unread';
+      const unreadField = uid === c.tenant_id ? 'unread_tenant' : 'unread_landlord';
       await query(`UPDATE conversations SET ${unreadField}=0 WHERE id=$1`, [req.params.id]);
       await query(`UPDATE messages SET is_read=1, read_at=NOW() WHERE conversation_id=$1 AND sender_id!=$2 AND is_read=0`, [req.params.id, uid]);
     }
@@ -238,7 +238,7 @@ router.get('/conversations/:id/messages', authenticate, [
 // ── POST /api/messages/conversations/:id/messages ──────────
 // Send a message in a conversation
 router.post('/conversations/:id/messages', authenticate, [
-  body('body').trim().isLength({ min: 1, max: 5000 }).withMessage('Message cannot be empty'),
+  body('content').trim().isLength({ min: 1, max: 5000 }).withMessage('Message cannot be empty'),
   body('attachment_url').optional().isURL(),
   body('attachment_type').optional().isIn(['image','document','voice']),
 ], async (req, res) => {
@@ -257,12 +257,12 @@ router.post('/conversations/:id/messages', authenticate, [
     if (conv.status === 'blocked') return fail(res, 'This conversation has been blocked', 403);
 
     const msgId = 'msg_' + uuidv4().replace(/-/g, '').slice(0, 12);
-    const { body: msgBody, attachment_url, attachment_type } = req.body;
+    const { content: msgContent, attachment_url, attachment_type } = req.body;
 
     await query(
-      `INSERT INTO messages (id, conversation_id, sender_id, body, attachment_url, attachment_type, created_at)
+      `INSERT INTO messages (id, conversation_id, sender_id, content, attachment_url, attachment_type, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
-      [msgId, conv.id, uid, msgBody.trim(), attachment_url || null, attachment_type || null]
+      [msgId, conv.id, uid, msgContent.trim(), attachment_url || null, attachment_type || null]
     );
 
     // Update conversation last message + increment unread for recipient
@@ -270,25 +270,25 @@ router.post('/conversations/:id/messages', authenticate, [
     await query(`
       UPDATE conversations
       SET last_message=$1, last_message_at=NOW(),
-          ${isFromTenant ? 'landlord_unread=landlord_unread+1' : 'tenant_unread=tenant_unread+1'}
+          ${isFromTenant ? 'unread_landlord=unread_landlord+1' : 'unread_tenant=unread_tenant+1'}
       WHERE id=$2
-    `, [msgBody.trim().slice(0, 100), conv.id]);
+    `, [msgContent.trim().slice(0, 100), conv.id]);
 
     const otherId = isFromTenant ? conv.landlord_id : conv.tenant_id;
     const senderName = req.user.full_name || 'Someone';
 
     // In-app notification (non-blocking)
     createNotification(otherId, 'new_message', `New message from ${senderName}`,
-      msgBody.trim().slice(0, 100), { conversation_id: conv.id }).catch(() => {});
+      msgContent.trim().slice(0, 100), { conversation_id: conv.id }).catch(() => {});
 
     // SMS for urgent — only if unread count is low to avoid spamming
-    const freshConv = await query('SELECT tenant_unread, landlord_unread FROM conversations WHERE id=$1', [conv.id]);
-    const recipUnread = isFromTenant ? freshConv.rows[0]?.landlord_unread : freshConv.rows[0]?.tenant_unread;
+    const freshConv = await query('SELECT unread_tenant, unread_landlord FROM conversations WHERE id=$1', [conv.id]);
+    const recipUnread = isFromTenant ? freshConv.rows[0]?.unread_landlord : freshConv.rows[0]?.unread_tenant;
     if (recipUnread === 1) {
       const otherUser = await query('SELECT phone FROM users WHERE id=$1', [otherId]);
       if (otherUser.rows[0]?.phone) {
         sendSMS(otherUser.rows[0].phone,
-          `PROPATI: ${senderName} sent you a message: "${msgBody.slice(0,80)}" — Reply at propati.ng`
+          `PROPATI: ${senderName} sent you a message: "${msgContent.slice(0,80)}" — Reply at propati.ng`
         ).catch(() => {});
       }
     }
@@ -318,7 +318,7 @@ router.patch('/conversations/:id/read', authenticate, async (req, res) => {
     const c = cv.rows[0];
     if (c.tenant_id !== uid && c.landlord_id !== uid) return fail(res, 'Not authorised', 403);
 
-    const unreadField = uid === c.tenant_id ? 'tenant_unread' : 'landlord_unread';
+    const unreadField = uid === c.tenant_id ? 'unread_tenant' : 'unread_landlord';
     await query(`UPDATE conversations SET ${unreadField}=0 WHERE id=$1`, [req.params.id]);
     await query(`UPDATE messages SET is_read=1, read_at=NOW() WHERE conversation_id=$1 AND sender_id!=$2`, [req.params.id, uid]);
 
@@ -352,7 +352,7 @@ router.get('/unread-count', authenticate, async (req, res) => {
     const uid = req.user.id;
     const { rows } = await query(`
       SELECT COALESCE(SUM(
-        CASE WHEN tenant_id=$1 THEN tenant_unread ELSE landlord_unread END
+        CASE WHEN tenant_id=$1 THEN unread_tenant ELSE unread_landlord END
       ), 0)::int AS total
       FROM conversations
       WHERE (tenant_id=$1 OR landlord_id=$1) AND status='active'

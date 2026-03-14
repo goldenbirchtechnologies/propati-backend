@@ -300,3 +300,110 @@ router.post('/admin/review', authenticate, requireRole('admin'), [
 });
 
 module.exports = router;
+
+// ── POST /api/verification/verify-identity ────────────────
+// NIN or BVN lookup via Prembly — for both landlords and tenants
+// Returns matched name + partial data for user to confirm
+router.post('/verify-identity', authenticate, [
+  body('type').isIn(['nin','bvn','drivers_license','voters_card']).withMessage('Type must be nin, bvn, drivers_license, or voters_card'),
+  body('number').trim().notEmpty().withMessage('ID number required'),
+  body('dob').optional().isString(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return fail(res, errors.array()[0].msg, 422);
+
+  try {
+    const { type, number, dob } = req.body;
+    const { verifyNIN, verifyBVN, verifyVotersCard, verifyDriversLicense } = require('../services/identity');
+
+    let result;
+    if (type === 'nin')              result = await verifyNIN(number);
+    else if (type === 'bvn')         result = await verifyBVN(number);
+    else if (type === 'voters_card') result = await verifyVotersCard(number, dob);
+    else                             result = await verifyDriversLicense(number, dob);
+
+    if (!result.verified) {
+      return fail(res, result.error || 'Identity could not be verified. Please check the number and try again.', 422);
+    }
+
+    // Store verification result in users table
+    const { encryptField, hashForLookup } = require('../services/encryption');
+    const updateFields = [];
+    const vals = [];
+    let i = 1;
+
+    if (type === 'nin') {
+      if (process.env.ENCRYPTION_KEY) {
+        updateFields.push(`nin_encrypted = $${i++}`, `nin_hash = $${i++}`);
+        vals.push(encryptField(number), hashForLookup(number));
+      }
+      updateFields.push(`nin_verified = TRUE`);
+    } else if (type === 'bvn') {
+      updateFields.push(`id_verified = TRUE`);
+    }
+
+    if (updateFields.length) {
+      vals.push(req.user.id);
+      await query(
+        `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${i}`,
+        vals
+      ).catch(e => logger.error('Failed to update user verification', { error: e.message }));
+    }
+
+    // Return data for user to confirm (never return the raw ID number)
+    return ok(res, {
+      verified: true,
+      data: {
+        first_name:  result.data.first_name,
+        last_name:   result.data.last_name,
+        middle_name: result.data.middle_name,
+        dob:         result.data.dob,
+        gender:      result.data.gender,
+        // Mask phone
+        phone:       result.data.phone ? result.data.phone.slice(0, 4) + '****' + result.data.phone.slice(-3) : null,
+        // Only return photo if verified via NIN
+        photo:       type === 'nin' ? result.data.photo : null,
+      },
+      type,
+      source: result.source,
+    });
+  } catch (e) {
+    logger.error('Identity verification error', { error: e.message });
+    return fail(res, 'Verification service temporarily unavailable. Please try again.', 500);
+  }
+});
+
+// ── POST /api/verification/confirm-identity ───────────────
+// User confirms the returned identity matches them — completes L2
+router.post('/confirm-identity', authenticate, [
+  body('listing_id').notEmpty(),
+  body('type').isIn(['nin','bvn','drivers_license','voters_card']),
+  body('confirmed').isBoolean(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return fail(res, errors.array()[0].msg, 422);
+
+  try {
+    const { listing_id, type, confirmed } = req.body;
+    if (!confirmed) return fail(res, 'Please confirm your identity to proceed');
+
+    // Update verification record — Layer 2 approved
+    const idLabel = type === 'nin' ? 'NIN' : type === 'bvn' ? 'BVN' : type === 'drivers_license' ? "Driver's License" : "Voter's Card";
+
+    await query(`
+      UPDATE verifications SET
+        l2_status = 'approved',
+        l2_id_type = $1,
+        l2_verified_at = NOW(),
+        current_layer = GREATEST(current_layer, 3),
+        overall_status = CASE WHEN overall_status = 'not_started' THEN 'in_progress' ELSE overall_status END,
+        updated_at = NOW()
+      WHERE listing_id = $2 AND (owner_id = $3 OR $4 = 'admin')
+    `, [idLabel, listing_id, req.user.id, req.user.role]);
+
+    return ok(res, { confirmed: true, layer: 2, message: `${idLabel} identity confirmed ✓` });
+  } catch (e) {
+    logger.error('Confirm identity error', { error: e.message });
+    return fail(res, 'Failed to confirm identity', 500);
+  }
+});
