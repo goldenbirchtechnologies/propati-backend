@@ -145,7 +145,7 @@ async function runRentReminders() {
   } catch(e) { logger.error('Rent reminder cron error',{error:e.message}); }
 }
 
-module.exports = { createNotification, sendEmail, sendSMS, sendTemplateEmail, notifyWelcome, notifyRentDue, notifyPaymentReceived, notifyEscrowReleased, notifyVerificationUpdate, notifyNewMessage, runRentReminders };
+// exports defined at bottom of file
 
 // ── Missing functions called by orgs.js and agreements.js ──
 
@@ -225,10 +225,9 @@ async function notifyAgreementReady(tenantId, landlordId, propertyTitle, agreeme
   } catch (e) { logger.error('notifyAgreementReady error', { error: e.message }); }
 }
 
-// Re-export all including new functions
-module.exports = Object.assign(module.exports, {
-  notifyTeamInvite,
-  notifyNewTicket,
-  notifyTicketResolved,
-  notifyAgreementReady,
-});
+module.exports = {
+  createNotification, sendEmail, sendSMS, sendTemplateEmail,
+  notifyWelcome, notifyRentDue, notifyPaymentReceived, notifyEscrowReleased,
+  notifyVerificationUpdate, notifyNewMessage, runRentReminders,
+  notifyTeamInvite, notifyNewTicket, notifyTicketResolved, notifyAgreementReady,
+};
