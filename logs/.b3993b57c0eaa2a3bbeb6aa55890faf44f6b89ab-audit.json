@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "C:\\Users\\USER\\Documents\\propati-backend\\logs\\.b3993b57c0eaa2a3bbeb6aa55890faf44f6b89ab-audit.json",
+    "files": [
+        {
+            "date": 1773499429824,
+            "name": "C:\\Users\\USER\\Documents\\propati-backend\\logs\\errors-2026-03-14.log",
+            "hash": "c3df6fcd3f09a8b9ef171dac48120bd4562b2d50f9b7721103ade0d8d10a5bbf"
+        }
+    ],
+    "hashType": "sha256"
+}
