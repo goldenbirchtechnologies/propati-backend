@@ -40,8 +40,11 @@ async function migrateV3() {
   logger.info('✅ Migration v3 complete');
 }
 
-migrateV3()
-  .then(() => process.exit(0))
-  .catch(e => { console.error(e.message); process.exit(1); });
+// Only exit when run directly — not when imported by migrate.js
+if (require.main === module) {
+  migrateV3()
+    .then(() => process.exit(0))
+    .catch(e => { console.error(e.message); process.exit(1); });
+}
 
 module.exports = { migrateV3 };
