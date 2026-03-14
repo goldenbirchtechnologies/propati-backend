@@ -21,8 +21,8 @@ app.set('trust proxy', 1);
 (async () => {
   try { await migrate(); logger.info('✅ Database ready'); }
   catch (err) {
-    logger.error('❌ DB startup failed', { error: err.message });
-    if (process.env.NODE_ENV === 'production') process.exit(1);
+    logger.error('❌ DB startup failed — continuing anyway', { error: err.message });
+    // Don't exit — let the app serve /health so Railway doesn't kill it
   }
 })();
 
