@@ -46,13 +46,7 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    if (process.env.NODE_ENV !== 'production') return cb(null, true);
-    logger.warn('CORS blocked: ' + origin + ' | allowed: ' + allowedOrigins.join(', '));
-    cb(new Error('Not allowed by CORS'));
-  },
+  origin: true, // allow all origins — tighten after launch
   credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','X-Request-ID'],
 }));
