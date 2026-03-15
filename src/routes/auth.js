@@ -477,4 +477,79 @@ async function sendWhatsAppOTP(phone, otp) {
   return false;
 }
 
+// ── POST /api/auth/clerk-sync ─────────────────────────────
+// Creates a local user when someone signs up directly through Clerk's UI
+// (Clerk account exists but no local DB record yet)
+router.post('/clerk-sync', [
+  body('role').isIn(['landlord','tenant','agent','estate_manager'])
+    .withMessage('Role must be landlord, tenant, agent, or estate_manager'),
+], async (req, res) => {
+  if (!useClerk()) return fail(res, 'Clerk not configured', 400);
+
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return fail(res, errors.array()[0].msg, 422);
+
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) {
+    return fail(res, 'No token provided', 401);
+  }
+
+  try {
+    const clerk = getClerkClient();
+    const payload = await clerk.verifyToken(header.slice(7));
+    const clerkUserId = payload.sub;
+
+    // Check if already synced
+    const existing = await query('SELECT * FROM users WHERE clerk_user_id = $1', [clerkUserId]);
+    if (existing.rows.length) {
+      return ok(res, { user: sanitizeUser(existing.rows[0]), message: 'Already synced' });
+    }
+
+    // Get Clerk user details
+    const clerkUser = await clerk.users.getUser(clerkUserId);
+    const email = clerkUser.emailAddresses?.[0]?.emailAddress;
+    const firstName = clerkUser.firstName || '';
+    const lastName = clerkUser.lastName || '';
+    const fullName = `${firstName} ${lastName}`.trim() || email?.split('@')[0] || 'User';
+    const phone = clerkUser.phoneNumbers?.[0]?.phoneNumber || null;
+
+    // Check if email exists (link to existing account)
+    if (email) {
+      const emailMatch = await query('SELECT * FROM users WHERE email = $1', [email]);
+      if (emailMatch.rows.length) {
+        await query('UPDATE users SET clerk_user_id = $1 WHERE id = $2', [clerkUserId, emailMatch.rows[0].id]);
+        const updated = await query('SELECT * FROM users WHERE id = $1', [emailMatch.rows[0].id]);
+        return ok(res, { user: sanitizeUser(updated.rows[0]), message: 'Linked to existing account' });
+      }
+    }
+
+    // Create new local user
+    const { role } = req.body;
+    const id = 'usr_' + uuidv4().replace(/-/g, '').slice(0, 16);
+
+    await query(
+      `INSERT INTO users (id, email, phone, password, role, full_name, clerk_user_id)
+       VALUES ($1, $2, $3, 'clerk_managed', $4, $5, $6)`,
+      [id, email, phone, role, fullName, clerkUserId]
+    );
+
+    // Welcome notifications (non-blocking)
+    createNotification(id, 'welcome', 'Welcome to PROPATI! 🏠',
+      `Hi ${firstName || fullName}, your account is ready. Complete your profile to unlock all features.`
+    ).catch(() => {});
+    if (email) sendTemplateEmail(email, 'welcome', { name: fullName }).catch(() => {});
+
+    const userResult = await query('SELECT * FROM users WHERE id = $1', [id]);
+    logger.info('clerk-sync: new user created', { id, role, email, clerkUserId });
+
+    return ok(res, {
+      user: sanitizeUser(userResult.rows[0]),
+      message: 'Account created via Clerk sync',
+    }, 201);
+  } catch (err) {
+    logger.error('clerk-sync error', { error: err.message });
+    return fail(res, 'Account sync failed. Please try again.', 500);
+  }
+});
+
 module.exports = router;
