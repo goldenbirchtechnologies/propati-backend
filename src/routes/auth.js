@@ -547,8 +547,8 @@ router.post('/clerk-sync', [
       message: 'Account created via Clerk sync',
     }, 201);
   } catch (err) {
-    logger.error('clerk-sync error', { error: err.message });
-    return fail(res, 'Account sync failed. Please try again.', 500);
+    logger.error('clerk-sync error', { error: err.message, stack: err.stack });
+    return fail(res, 'Account sync failed: ' + (err.errors?.[0]?.longMessage || err.message || 'Unknown error'), 500);
   }
 });
 
