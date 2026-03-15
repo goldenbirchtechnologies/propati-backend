@@ -496,7 +496,8 @@ router.post('/clerk-sync', [
 
   try {
     const clerk = getClerkClient();
-    const payload = await clerk.verifyToken(header.slice(7));
+    const { verifyToken } = require('@clerk/express');
+    const payload = await verifyToken(header.slice(7), { secretKey: process.env.CLERK_SECRET_KEY });
     const clerkUserId = payload.sub;
 
     // Check if already synced

@@ -15,6 +15,14 @@ function getClerkClient() {
   return _clerkClient;
 }
 
+let _verifyToken = null;
+function getVerifyToken() {
+  if (!_verifyToken) {
+    _verifyToken = require('@clerk/express').verifyToken;
+  }
+  return _verifyToken;
+}
+
 // ── Clerk auth: verify session token, look up local user ──
 async function authenticateClerk(req, res, next) {
   const header = req.headers.authorization;
@@ -24,7 +32,8 @@ async function authenticateClerk(req, res, next) {
   const token = header.slice(7);
   try {
     const clerk = getClerkClient();
-    const payload = await clerk.verifyToken(token);
+    const verify = getVerifyToken();
+    const payload = await verify(token, { secretKey: process.env.CLERK_SECRET_KEY });
     const clerkUserId = payload.sub;
 
     // Look up local user by clerk_user_id, fall back to email
@@ -118,7 +127,8 @@ async function optionalAuth(req, res, next) {
   try {
     if (useClerk()) {
       const clerk = getClerkClient();
-      const payload = await clerk.verifyToken(header.slice(7));
+      const verify = getVerifyToken();
+      const payload = await verify(header.slice(7), { secretKey: process.env.CLERK_SECRET_KEY });
       const result = await query('SELECT * FROM users WHERE clerk_user_id = $1', [payload.sub]);
       req.user = result.rows[0] || null;
     } else {
